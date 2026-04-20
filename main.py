@@ -189,7 +189,8 @@ def load_latest_conversation(patient_id):
 # ---------------- STREAMLIT ----------------
 import streamlit as st
 from datetime import datetime
-st.set_page_config(page_title="Medical Console", page_icon="🩺", layout="wide")
+import time
+st.set_page_config(page_title="ClinicAi", page_icon="🩺", layout="wide")
 
 
 def init_session_state():
@@ -206,6 +207,8 @@ def init_session_state():
         "chat_audio_hash_by_patient": {},
         "active_section": "Dashboard",
         "auto_analysis_cache": {},
+        "show_landing_page": True,
+        "show_startup_loader": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -286,10 +289,81 @@ def apply_theme():
         background: {palette['surface']};
         color: {palette['text']};
     }}
+    .landing-shell {{
+        margin: 8vh auto 0;
+        max-width: 880px;
+        text-align: center;
+        padding: 2.5rem;
+        background: linear-gradient(180deg, rgba(56, 189, 248, 0.12) 0%, rgba(17, 24, 39, 0.7) 100%);
+        border: 1px solid {palette['border']};
+        border-radius: 18px;
+    }}
+    .landing-title {{
+        font-size: 3rem;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+        margin-bottom: 0.35rem;
+    }}
+    .landing-copy {{
+        color: {palette['muted']};
+        font-size: 1.05rem;
+        margin-bottom: 1.2rem;
+    }}
+    .pulse-dot {{
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: {palette['accent']};
+        margin: 0 auto 14px;
+        box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.7);
+        animation: pulse 1.4s infinite;
+    }}
+    @keyframes pulse {{
+        0% {{ box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.7); }}
+        70% {{ box-shadow: 0 0 0 16px rgba(56, 189, 248, 0); }}
+        100% {{ box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }}
+    }}
 </style>
 """,
         unsafe_allow_html=True,
     )
+
+
+def render_landing_page():
+    st.markdown(
+        """
+        <div class="landing-shell">
+            <div class="pulse-dot"></div>
+            <div class="landing-title">ClinicAi</div>
+            <div class="landing-copy">AI-powered clinical console for patient conversations, notes, and analysis.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    _, center_col, _ = st.columns([1, 1.4, 1])
+    with center_col:
+        st.caption("Ready to begin")
+        if st.button("Enter ClinicAi", use_container_width=True, key="enter_clinicai_btn"):
+            st.session_state.show_landing_page = False
+            st.session_state.show_startup_loader = True
+            st.rerun()
+
+
+def render_clinicai_loader():
+    st.markdown('<div class="app-title">ClinicAi</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-subtitle">Preparing your clinical workspace...</div>', unsafe_allow_html=True)
+
+    progress = st.progress(0)
+    checkpoints = [
+        (20, "Loading patient modules"),
+        (45, "Connecting medical context"),
+        (75, "Booting AI assistant"),
+        (100, "ClinicAi ready"),
+    ]
+    for value, message in checkpoints:
+        progress.progress(value)
+        st.caption(message)
+        time.sleep(0.25)
 
 
 def render_sidebar():
@@ -439,7 +513,8 @@ def render_sidebar():
 
 
 def render_chat_view(patient):
-    st.markdown('<div class="app-title">Doctor-Patient Chat</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-title">ClinicAi</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-subtitle">Doctor-Patient Chat</div>', unsafe_allow_html=True)
     st.caption("Message history is summarized after every submitted message.")
 
     patient_id = str(patient["_id"])
@@ -581,7 +656,8 @@ def render_dashboard_view(patient):
     patient_messages = st.session_state.conversation_messages.get(patient_id, [])
     patient_summary = st.session_state.conversation_summary.get(patient_id, "")
 
-    st.markdown('<div class="app-title">Patient Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-title">ClinicAi</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-subtitle">Patient Dashboard</div>', unsafe_allow_html=True)
     st.markdown('<div class="app-subtitle">Consolidated timeline, notes, and AI-assisted clinical insights.</div>', unsafe_allow_html=True)
 
     metric_col1, metric_col2, metric_col3 = st.columns(3)
@@ -760,11 +836,21 @@ Question:
 
 
 init_session_state()
-render_sidebar()
 apply_theme()
 
+if st.session_state.show_startup_loader:
+    render_clinicai_loader()
+    st.session_state.show_startup_loader = False
+    st.rerun()
+
+if st.session_state.show_landing_page:
+    render_landing_page()
+    st.stop()
+
+render_sidebar()
+
 if not st.session_state.selected_patient:
-    st.markdown('<div class="app-title">Medical Console</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-title">ClinicAi</div>', unsafe_allow_html=True)
     st.info("Select a patient from the sidebar to continue.")
 elif st.session_state.active_section == "Chat":
     render_chat_view(st.session_state.selected_patient)
