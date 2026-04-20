@@ -128,6 +128,64 @@ def extract_pdf_text(pdf_file):
                 report_text += page_text + "\n"
     return report_text.strip()
 
+
+def summarize_conversation(messages):
+    transcript = "\n".join([f"{msg['speaker']}: {msg['text']}" for msg in messages])
+
+    summary_prompt = PromptTemplate(
+        template="""
+You are a medical assistant.
+
+Summarize this doctor-patient conversation clearly and briefly.
+Focus on symptoms, concerns, advice, decisions, and next steps.
+
+Conversation:
+{conversation}
+
+Summary:
+""",
+        input_variables=["conversation"]
+    )
+
+    parser = StrOutputParser()
+    chain = summary_prompt | llm | parser
+
+    return chain.invoke({"conversation": transcript})
+
+
+def save_text_to_patient_store(patient_id, text):
+    patient_store_path = f"faiss/{patient_id}"
+    os.makedirs(patient_store_path, exist_ok=True)
+
+    index_path = os.path.join(patient_store_path, "index.faiss")
+
+    if os.path.exists(index_path):
+        try:
+            vector_store = FAISS.load_local(
+                patient_store_path,
+                embeddings,
+                allow_dangerous_deserialization=True
+            )
+            vector_store.add_texts([text])
+        except Exception:
+            vector_store = FAISS.from_texts([text], embeddings)
+    else:
+        vector_store = FAISS.from_texts([text], embeddings)
+
+    vector_store.save_local(patient_store_path)
+
+
+def load_latest_conversation(patient_id):
+    latest_conversation = consult_col.find_one(
+        {"patient_id": patient_id, "type": "conversation"},
+        sort=[("date", -1)]
+    )
+
+    if not latest_conversation:
+        return [], ""
+
+    return latest_conversation.get("conversation", []), latest_conversation.get("conversation_summary", "")
+
 # ---------------- STREAMLIT ----------------
 import streamlit as st
 from datetime import datetime
@@ -154,8 +212,23 @@ if "clinical_audio_path" not in st.session_state:
 if "clinical_audio_hash" not in st.session_state:
     st.session_state.clinical_audio_hash = ""
 
+if "conversation_messages" not in st.session_state:
+    st.session_state.conversation_messages = {}
+
+if "conversation_summary" not in st.session_state:
+    st.session_state.conversation_summary = {}
+
+if "active_section" not in st.session_state:
+    st.session_state.active_section = "Dashboard"
+
 # ================= SIDEBAR =================
 st.sidebar.title("👤 Patients")
+
+st.sidebar.markdown("### Sections")
+if st.sidebar.button("📄 Dashboard"):
+    st.session_state.active_section = "Dashboard"
+if st.sidebar.button("💬 Chat"):
+    st.session_state.active_section = "Chat"
 
 # Add Patient
 name = st.sidebar.text_input("Name")
@@ -300,6 +373,90 @@ if st.sidebar.button("✅ Use This Text"):
 
     st.sidebar.success("Text Ready ✅")
 
+if st.session_state.active_section == "Chat":
+    st.title("💬 Doctor - Patient Chat")
+
+    if not st.session_state.selected_patient:
+        st.info("👈 Select a patient from the sidebar first")
+        st.stop()
+
+    patient = st.session_state.selected_patient
+    patient_id = str(patient["_id"])
+
+    if patient_id not in st.session_state.conversation_messages or not st.session_state.conversation_messages[patient_id]:
+        loaded_messages, loaded_summary = load_latest_conversation(patient["_id"])
+        st.session_state.conversation_messages[patient_id] = loaded_messages
+        st.session_state.conversation_summary[patient_id] = loaded_summary
+
+    patient_messages = st.session_state.conversation_messages.get(patient_id, [])
+    patient_summary = st.session_state.conversation_summary.get(patient_id, "")
+
+    st.caption("Chat here. The summary updates automatically after each submitted message.")
+
+    speaker = st.radio(
+        "Speaker",
+        ["Doctor", "Patient"],
+        horizontal=True,
+        key=f"chat_speaker_{patient_id}"
+    )
+
+    new_message = st.chat_input("Type a message and press Enter")
+
+    if new_message:
+        patient_messages.append({
+            "speaker": speaker,
+            "text": new_message.strip(),
+            "time": datetime.now()
+        })
+        st.session_state.conversation_messages[patient_id] = patient_messages
+
+        try:
+            with st.spinner("Generating live summary..."):
+                conversation_summary = summarize_conversation(patient_messages)
+
+            st.session_state.conversation_summary[patient_id] = conversation_summary
+
+            consult_col.insert_one({
+                "patient_id": patient["_id"],
+                "date": datetime.now(),
+                "type": "conversation",
+                "description": "Doctor-patient conversation",
+                "conversation": patient_messages,
+                "conversation_summary": conversation_summary
+            })
+
+            save_text_to_patient_store(patient_id, f"Conversation Summary: {conversation_summary}")
+            st.success("Message saved and summary updated ✅")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Conversation summary failed: {exc}")
+
+    if patient_messages:
+        st.markdown("#### Chat Log")
+        for message in patient_messages:
+            stamp = message["time"].strftime("%H:%M") if message.get("time") else ""
+            st.write(f"**{message['speaker']}** {stamp}")
+            st.write(message["text"])
+            st.divider()
+
+    if patient_summary:
+        st.markdown("#### Live AI Summary")
+        st.write(patient_summary)
+
+    clear_chat_col, back_col = st.columns(2)
+    with clear_chat_col:
+        if st.button("Clear Chat", key=f"clear_chat_{patient_id}"):
+            st.session_state.conversation_messages[patient_id] = []
+            st.session_state.conversation_summary[patient_id] = ""
+            st.rerun()
+
+    with back_col:
+        if st.button("Back to Dashboard", key=f"back_dashboard_{patient_id}"):
+            st.session_state.active_section = "Dashboard"
+            st.rerun()
+
+    st.stop()
+
 # ================= MAIN =================
 col1, col2 = st.columns([1, 3])
 
@@ -317,6 +474,8 @@ with col2:
     if st.session_state.selected_patient:
         patient = st.session_state.selected_patient
         patient_id = str(patient["_id"])
+        patient_messages = st.session_state.conversation_messages.get(patient_id, [])
+        patient_summary = st.session_state.conversation_summary.get(patient_id, "")
 
         # ================= HISTORY =================
         st.subheader("📜 History")
@@ -326,13 +485,27 @@ with col2:
         )
 
         full_context = ""
+        latest_saved_conversation_summary = ""
 
         for c in consultations:
             desc = c.get("description", "")
             st.write(f"🗓 {c['date'].strftime('%Y-%m-%d')}")
-            st.write(f"📝 {desc}")
+            if c.get("type") == "conversation" and c.get("conversation_summary"):
+                st.write("💬 Conversation Summary")
+                st.write(c["conversation_summary"])
+                if not latest_saved_conversation_summary:
+                    latest_saved_conversation_summary = c["conversation_summary"]
+            else:
+                st.write(f"📝 {desc}")
             st.divider()
-            full_context += desc + "\n"
+            full_context += c.get("conversation_summary", desc) + "\n"
+
+        if not patient_summary:
+            patient_summary = latest_saved_conversation_summary
+
+        if patient_summary:
+            st.info("Latest conversation summary")
+            st.write(patient_summary)
 
         # ================= FINAL DESCRIPTION =================
         st.subheader("✍ Clinical Summary / Physician Prescription Notes")
@@ -402,19 +575,7 @@ with col2:
                 "description": final_desc
             })
 
-            os.makedirs(f"faiss/{patient_id}", exist_ok=True)
-
-            if os.path.exists(f"faiss/{patient_id}/index.faiss"):
-                vector_store = FAISS.load_local(
-                    f"faiss/{patient_id}",
-                    embeddings,
-                    allow_dangerous_deserialization=True
-                )
-                vector_store.add_texts([final_desc])
-            else:
-                vector_store = FAISS.from_texts([final_desc], embeddings)
-
-            vector_store.save_local(f"faiss/{patient_id}")
+            save_text_to_patient_store(patient_id, final_desc)
 
             # CLEAR AFTER SAVE
             st.session_state.final_input = ""
