@@ -231,13 +231,6 @@ if recorded_audio:
 else:
     st.sidebar.info("No recording yet. Click the mic and speak, then stop recording.")
 
-# Direct Text
-st.sidebar.markdown("### ✍️ Or Type Directly")
-
-direct_text = st.sidebar.text_area(
-    "Write patient symptoms / conversation",
-    height=120
-)
 
 # Edit Transcribed
 manual_text_sidebar = st.sidebar.text_area(
@@ -247,6 +240,8 @@ manual_text_sidebar = st.sidebar.text_area(
 )
 
 # Use Text
+direct_text = ""
+
 if st.sidebar.button("✅ Use This Text"):
 
     if direct_text.strip():
