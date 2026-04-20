@@ -1,5 +1,11 @@
 from dotenv import load_dotenv
 import os
+import io
+import hashlib
+import subprocess
+import tempfile
+import shutil
+
 load_dotenv()
 
 # ---------------- LLM ----------------
@@ -41,14 +47,70 @@ from langchain_core.output_parsers import StrOutputParser
 from groq import Groq
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-def speech_to_text(audio_file):
-    with open(audio_file, "rb") as f:
-        transcription = groq_client.audio.transcriptions.create(
-            file=f,
-            model="whisper-large-v3",
-            prompt="Hindi, Marathi, English medical conversation between doctor and patient"
-        )
-    return transcription.text.strip()
+def transcribe_audio_bytes(audio_bytes, filename="chunk.wav"):
+    audio_buffer = io.BytesIO(audio_bytes)
+    audio_buffer.name = filename
+
+    transcription = groq_client.audio.transcriptions.create(
+        file=audio_buffer,
+        model="whisper-large-v3",
+        prompt=(
+            "Transcribe this multilingual medical conversation accurately. "
+            "Auto-detect Hindi, Marathi, and English."
+        ),
+    )
+
+    text = getattr(transcription, "text", "")
+    if not text and isinstance(transcription, dict):
+        text = transcription.get("text", "")
+
+    return text.strip() if text else ""
+
+
+def convert_wav_to_mp3(wav_path, mp3_path):
+    ffmpeg_executable = shutil.which("ffmpeg")
+
+    if not ffmpeg_executable:
+        raise FileNotFoundError("FFmpeg was not found on this machine")
+
+    subprocess.run(
+        [
+            ffmpeg_executable,
+            "-y",
+            "-i",
+            wav_path,
+            "-codec:a",
+            "libmp3lame",
+            "-q:a",
+            "4",
+            mp3_path,
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def save_recorded_audio_as_mp3(recorded_audio):
+    audio_bytes = recorded_audio.getvalue() if hasattr(recorded_audio, "getvalue") else recorded_audio.read()
+
+    if not audio_bytes:
+        raise ValueError("Recorded audio is empty")
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as wav_file:
+        wav_file.write(audio_bytes)
+        wav_path = wav_file.name
+
+    mp3_handle = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    mp3_path = mp3_handle.name
+    mp3_handle.close()
+
+    try:
+        convert_wav_to_mp3(wav_path, mp3_path)
+    finally:
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
+
+    return mp3_path
 
 # ---------------- STREAMLIT ----------------
 import streamlit as st
@@ -63,6 +125,12 @@ if "transcribed_text" not in st.session_state:
 
 if "final_input" not in st.session_state:
     st.session_state.final_input = ""
+
+if "recorded_audio_path" not in st.session_state:
+    st.session_state.recorded_audio_path = ""
+
+if "recorded_audio_hash" not in st.session_state:
+    st.session_state.recorded_audio_hash = ""
 
 # ================= SIDEBAR =================
 st.sidebar.title("👤 Patients")
@@ -96,33 +164,72 @@ for p in patients:
         st.session_state.selected_patient = p
 
 # ================= INPUT =================
-st.sidebar.markdown("### 🎤 Voice + Text Input")
+st.sidebar.markdown("### 🎙️ Upload MP3")
+st.sidebar.caption("Upload an MP3 file and transcribe it into text.")
+mp3_file = st.sidebar.file_uploader("📤 Upload MP3", type=["mp3"])
 
-audio_file = st.sidebar.file_uploader("📤 Upload Audio", type=["wav", "mp3"])
-mic_audio = st.sidebar.audio_input("🎙️ Record from Mic")
+if st.sidebar.button("Transcribe MP3"):
+    if mp3_file:
+        try:
+            st.sidebar.info("Transcribing MP3...")
+            uploaded_bytes = mp3_file.read()
+            text = transcribe_audio_bytes(uploaded_bytes, filename=mp3_file.name or "audio.mp3")
 
-# Convert Audio
-if st.sidebar.button("🎤 Convert Audio to Text"):
-
-    file_to_use = None
-
-    if mic_audio:
-        with open("temp_audio.wav", "wb") as f:
-            f.write(mic_audio.read())
-        file_to_use = "temp_audio.wav"
-
-    elif audio_file:
-        with open("temp_audio.wav", "wb") as f:
-            f.write(audio_file.read())
-        file_to_use = "temp_audio.wav"
-
-    if file_to_use:
-        st.sidebar.info("Transcribing...")
-        text = speech_to_text(file_to_use)
-        st.session_state.transcribed_text = text
-        st.sidebar.success("Done ✅")
+            if text:
+                st.session_state.transcribed_text = text
+                st.session_state.final_input = text
+                st.sidebar.success("MP3 transcribed ✅")
+                st.sidebar.text_area("MP3 Transcript", value=text, height=180)
+            else:
+                st.sidebar.warning("No speech detected in the MP3.")
+        except Exception as exc:
+            st.sidebar.error(f"MP3 transcription failed: {exc}")
     else:
-        st.sidebar.warning("Upload or record audio first")
+        st.sidebar.warning("Upload an MP3 file first.")
+
+st.sidebar.markdown("### 🎙️ Record from Mic")
+st.sidebar.caption("Click the mic, speak, then save the recording as MP3 and convert it to text.")
+
+recorded_audio = st.sidebar.audio_input("🎤 Record Audio")
+
+if recorded_audio:
+    try:
+        recorded_bytes = recorded_audio.getvalue() if hasattr(recorded_audio, "getvalue") else recorded_audio.read()
+        audio_hash = hashlib.sha256(recorded_bytes).hexdigest()
+
+        if audio_hash != st.session_state.recorded_audio_hash:
+            if st.session_state.recorded_audio_path and os.path.exists(st.session_state.recorded_audio_path):
+                os.remove(st.session_state.recorded_audio_path)
+
+            st.session_state.recorded_audio_path = save_recorded_audio_as_mp3(recorded_audio)
+            st.session_state.recorded_audio_hash = audio_hash
+
+        st.sidebar.audio(st.session_state.recorded_audio_path)
+        st.sidebar.success("Recording saved as MP3 ✅")
+        st.sidebar.caption(f"Saved at: {st.session_state.recorded_audio_path}")
+
+        if st.sidebar.button("Convert Recorded MP3 to Text"):
+            with open(st.session_state.recorded_audio_path, "rb") as audio_file_handle:
+                text = transcribe_audio_bytes(audio_file_handle.read(), filename=os.path.basename(st.session_state.recorded_audio_path))
+
+            if text:
+                st.session_state.transcribed_text = text
+                st.session_state.final_input = text
+                st.sidebar.success("Recorded audio transcribed ✅")
+                st.sidebar.text_area("Recorded Audio Transcript", value=text, height=180)
+            else:
+                st.sidebar.warning("No speech detected in the recording.")
+
+        if st.sidebar.button("Clear Recording"):
+            if st.session_state.recorded_audio_path and os.path.exists(st.session_state.recorded_audio_path):
+                os.remove(st.session_state.recorded_audio_path)
+            st.session_state.recorded_audio_path = ""
+            st.session_state.recorded_audio_hash = ""
+            st.rerun()
+    except Exception as exc:
+        st.sidebar.error(f"Mic recording failed: {exc}")
+else:
+    st.sidebar.info("No recording yet. Click the mic and speak, then stop recording.")
 
 # Direct Text
 st.sidebar.markdown("### ✍️ Or Type Directly")
