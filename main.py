@@ -203,6 +203,7 @@ def init_session_state():
         "clinical_audio_hash": "",
         "conversation_messages": {},
         "conversation_summary": {},
+        "chat_audio_hash_by_patient": {},
         "active_section": "Dashboard",
         "auto_analysis_cache": {},
     }
@@ -461,6 +462,59 @@ def render_chat_view(patient):
         horizontal=True,
         key=f"chat_speaker_{patient_id}",
     )
+
+    with st.container(border=True):
+        st.caption("Voice Input (auto-send)")
+        chat_audio = st.audio_input("Record voice message", key=f"chat_audio_input_{patient_id}")
+        if chat_audio:
+            st.audio(chat_audio)
+            try:
+                chat_audio_bytes = chat_audio.getvalue() if hasattr(chat_audio, "getvalue") else chat_audio.read()
+                chat_audio_hash = hashlib.sha256(chat_audio_bytes).hexdigest()
+                last_hash = st.session_state.chat_audio_hash_by_patient.get(patient_id)
+
+                if chat_audio_hash != last_hash:
+                    with st.spinner("Transcribing and sending voice message..."):
+                        transcribed_message = transcribe_audio_bytes(
+                            chat_audio_bytes,
+                            filename=getattr(chat_audio, "name", "chat_audio.wav"),
+                        )
+
+                    if not transcribed_message.strip():
+                        st.warning("No speech detected in the audio.")
+                    else:
+                        patient_messages.append(
+                            {
+                                "speaker": speaker,
+                                "text": transcribed_message.strip(),
+                                "time": datetime.now(),
+                            }
+                        )
+                        st.session_state.conversation_messages[patient_id] = patient_messages
+
+                        with st.spinner("Generating live summary..."):
+                            conversation_summary = summarize_conversation(patient_messages)
+                        st.session_state.conversation_summary[patient_id] = conversation_summary
+
+                        consult_col.insert_one(
+                            {
+                                "patient_id": patient["_id"],
+                                "date": datetime.now(),
+                                "type": "conversation",
+                                "description": "Doctor-patient conversation",
+                                "conversation": patient_messages,
+                                "conversation_summary": conversation_summary,
+                            }
+                        )
+                        save_text_to_patient_store(patient_id, f"Conversation Summary: {conversation_summary}")
+                        st.session_state.chat_audio_hash_by_patient[patient_id] = chat_audio_hash
+                        st.success("Voice message auto-sent and summary updated.")
+                        st.rerun()
+                else:
+                    st.caption("Latest recording already sent.")
+            except Exception as exc:
+                st.error(f"Voice transcription failed: {exc}")
+
     new_message = st.chat_input("Type a message and press Enter")
 
     if new_message and new_message.strip():
