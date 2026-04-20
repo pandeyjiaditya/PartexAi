@@ -42,6 +42,8 @@ embeddings = GoogleGenerativeAIEmbeddings(
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_classic.retrievers import ContextualCompressionRetriever
+from langchain_classic.retrievers.document_compressors.chain_extract import LLMChainExtractor
 
 # ---------------- AUDIO ----------------
 from groq import Groq
@@ -413,8 +415,14 @@ Give a short summary.
                     allow_dangerous_deserialization=True
                 )
 
-                retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-                docs = retriever.invoke(query)
+                base_retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+                compressor = LLMChainExtractor.from_llm(llm)
+                compression_retriever = ContextualCompressionRetriever(
+                    base_compressor=compressor,
+                    base_retriever=base_retriever,
+                )
+
+                docs = compression_retriever.invoke(query)
 
                 rag_context = "\n\n".join([doc.page_content for doc in docs])
                 final_context = rag_context + "\n\n" + full_context
