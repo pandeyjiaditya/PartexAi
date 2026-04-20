@@ -148,6 +148,12 @@ if "recorded_audio_path" not in st.session_state:
 if "recorded_audio_hash" not in st.session_state:
     st.session_state.recorded_audio_hash = ""
 
+if "clinical_audio_path" not in st.session_state:
+    st.session_state.clinical_audio_path = ""
+
+if "clinical_audio_hash" not in st.session_state:
+    st.session_state.clinical_audio_hash = ""
+
 # ================= SIDEBAR =================
 st.sidebar.title("👤 Patients")
 
@@ -330,6 +336,48 @@ with col2:
 
         # ================= FINAL DESCRIPTION =================
         st.subheader("✍ Clinical Summary / Physician Prescription Notes")
+
+        st.caption("Type clinical notes directly, or record audio to append transcript.")
+        clinical_audio = st.audio_input("🎤 Record Clinical Summary Audio", key="clinical_summary_audio_input")
+
+        if clinical_audio:
+            try:
+                clinical_bytes = clinical_audio.getvalue() if hasattr(clinical_audio, "getvalue") else clinical_audio.read()
+                clinical_hash = hashlib.sha256(clinical_bytes).hexdigest()
+
+                if clinical_hash != st.session_state.clinical_audio_hash:
+                    if st.session_state.clinical_audio_path and os.path.exists(st.session_state.clinical_audio_path):
+                        os.remove(st.session_state.clinical_audio_path)
+
+                    st.session_state.clinical_audio_path = save_recorded_audio_as_mp3(clinical_audio)
+                    st.session_state.clinical_audio_hash = clinical_hash
+
+                st.audio(st.session_state.clinical_audio_path)
+
+                if st.button("Transcribe Clinical Audio", key="transcribe_clinical_audio"):
+                    with open(st.session_state.clinical_audio_path, "rb") as audio_file_handle:
+                        clinical_text = transcribe_audio_bytes(
+                            audio_file_handle.read(),
+                            filename=os.path.basename(st.session_state.clinical_audio_path)
+                        )
+
+                    if clinical_text:
+                        existing_text = st.session_state.get("final_input", "").strip()
+                        st.session_state.final_input = (
+                            f"{existing_text}\n{clinical_text}".strip() if existing_text else clinical_text
+                        )
+                        st.success("Clinical audio transcribed and added ✅")
+                    else:
+                        st.warning("No speech detected in clinical audio.")
+
+                if st.button("Clear Clinical Audio", key="clear_clinical_audio"):
+                    if st.session_state.clinical_audio_path and os.path.exists(st.session_state.clinical_audio_path):
+                        os.remove(st.session_state.clinical_audio_path)
+                    st.session_state.clinical_audio_path = ""
+                    st.session_state.clinical_audio_hash = ""
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"Clinical audio processing failed: {exc}")
 
         final_desc = st.session_state.get("final_input", "")
 
