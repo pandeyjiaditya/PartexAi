@@ -47,6 +47,9 @@ from langchain_core.output_parsers import StrOutputParser
 from groq import Groq
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
+# ---------------- PDF ----------------
+import pdfplumber
+
 def transcribe_audio_bytes(audio_bytes, filename="chunk.wav"):
     audio_buffer = io.BytesIO(audio_bytes)
     audio_buffer.name = filename
@@ -111,6 +114,17 @@ def save_recorded_audio_as_mp3(recorded_audio):
             os.remove(wav_path)
 
     return mp3_path
+
+
+def extract_pdf_text(pdf_file):
+    """Extract medical findings from test report"""
+    report_text = ""
+    with pdfplumber.open(pdf_file) as pdf:
+        for page in pdf.pages:
+            page_text = page.extract_text()
+            if page_text:
+                report_text += page_text + "\n"
+    return report_text.strip()
 
 # ---------------- STREAMLIT ----------------
 import streamlit as st
@@ -232,6 +246,30 @@ else:
     st.sidebar.info("No recording yet. Click the mic and speak, then stop recording.")
 
 
+# ================= TEST REPORTS UPLOAD =================
+st.sidebar.markdown("### 🏥 Upload Test Reports")
+st.sidebar.caption("Upload your test report and automatically extract findings.")
+test_report_file = st.sidebar.file_uploader("📤 Upload Report", type=["pdf"])
+
+if st.sidebar.button("Extract Test Report"):
+    if test_report_file:
+        try:
+            st.sidebar.info("Reading test report...")
+            report_text = extract_pdf_text(test_report_file)
+
+            if report_text:
+                st.session_state.transcribed_text = report_text
+                st.session_state.final_input = report_text
+                st.sidebar.success("Test report extracted ✅")
+                preview = report_text[:500] + "..." if len(report_text) > 500 else report_text
+                st.sidebar.text_area("Report Findings", value=preview, height=180, disabled=True)
+            else:
+                st.sidebar.warning("No findings extracted from report.")
+        except Exception as exc:
+            st.sidebar.error(f"Report extraction failed: {exc}")
+    else:
+        st.sidebar.warning("Please upload a test report first.")
+
 # Edit Transcribed
 manual_text_sidebar = st.sidebar.text_area(
     "Edit Transcribed Text",
@@ -289,12 +327,12 @@ with col2:
             full_context += desc + "\n"
 
         # ================= FINAL DESCRIPTION =================
-        st.subheader("✍ Final Doctor Description (Verified)")
+        st.subheader("✍ Clinical Summary / Physician Prescription Notes")
 
         final_desc = st.session_state.get("final_input", "")
 
         final_desc = st.text_area(
-            "Edit Final Description Before Saving",
+            "Edit Clinical Summary Before Saving",
             value=final_desc,
             height=150
         )
@@ -302,7 +340,7 @@ with col2:
         st.session_state.final_input = final_desc
 
         # ================= SAVE =================
-        if st.button("Add Description"):
+        if st.button("ADD"):
 
             if not final_desc:
                 st.warning("Please enter text or audio")
