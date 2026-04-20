@@ -204,7 +204,6 @@ def init_session_state():
         "conversation_messages": {},
         "conversation_summary": {},
         "active_section": "Dashboard",
-        "ui_theme": "Light",
         "auto_analysis_cache": {},
     }
     for key, value in defaults.items():
@@ -212,29 +211,17 @@ def init_session_state():
             st.session_state[key] = value
 
 
-def apply_theme(theme_name):
-    if theme_name == "Dark":
-        palette = {
-            "bg": "#0f172a",
-            "surface": "#111827",
-            "surface_soft": "#1f2937",
-            "border": "#334155",
-            "text": "#f8fafc",
-            "muted": "#cbd5e1",
-            "accent": "#38bdf8",
-            "accent_soft": "rgba(56, 189, 248, 0.18)",
-        }
-    else:
-        palette = {
-            "bg": "#f3f6fb",
-            "surface": "#ffffff",
-            "surface_soft": "#eef2ff",
-            "border": "#d6deed",
-            "text": "#0b1324",
-            "muted": "#334155",
-            "accent": "#0ea5e9",
-            "accent_soft": "rgba(14, 165, 233, 0.14)",
-        }
+def apply_theme():
+    palette = {
+        "bg": "#0f172a",
+        "surface": "#111827",
+        "surface_soft": "#1f2937",
+        "border": "#334155",
+        "text": "#f8fafc",
+        "muted": "#cbd5e1",
+        "accent": "#38bdf8",
+        "accent_soft": "rgba(56, 189, 248, 0.18)",
+    }
 
     st.markdown(
         f"""
@@ -307,13 +294,6 @@ def apply_theme(theme_name):
 def render_sidebar():
     st.sidebar.markdown("## Patient Console")
     st.sidebar.caption("Manage records, capture notes, and drive AI workflows.")
-
-    is_dark_mode = st.sidebar.toggle(
-        "Dark mode",
-        value=(st.session_state.ui_theme == "Dark"),
-        help="Switch between light and dark themes.",
-    )
-    st.session_state.ui_theme = "Dark" if is_dark_mode else "Light"
 
     st.sidebar.markdown("---")
     st.session_state.active_section = st.sidebar.radio(
@@ -727,7 +707,7 @@ Question:
 
 init_session_state()
 render_sidebar()
-apply_theme(st.session_state.ui_theme)
+apply_theme()
 
 if not st.session_state.selected_patient:
     st.markdown('<div class="app-title">Medical Console</div>', unsafe_allow_html=True)
